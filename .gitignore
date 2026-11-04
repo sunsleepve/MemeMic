@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+settings.json
+presets.json
+log.txt
+
+# драйвер VB-Cable не распространяется вместе с проектом (см. README)
+drivers/
+*.zip
+
+# сборка
+build/
+dist/
+*.spec
+*.egg-info/
