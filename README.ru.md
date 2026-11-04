@@ -1,5 +1,9 @@
 # MemeMic
 
+<p align="center">
+  <a href="README.md">English</a> · <a href="README.ru.md">Русский</a>
+</p>
+
 <p align="center"><img src="docs/logo.png" width="128" alt="Логотип MemeMic"></p>
 
 **Войс-ченджер для Windows в реальном времени, с мемными пресетами.**  
