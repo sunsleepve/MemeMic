@@ -34,7 +34,15 @@ def sine(freq: float, seconds: float, sr: int = SR) -> np.ndarray:
 
 def only_pitch(semitones: float) -> dict:
     params = dict(dsp.DEFAULT_PARAMS)
-    params.update({"pitch": semitones, "gate_db": -80.0})
+    params.update(
+        {
+            "pitch": semitones,
+            "gate_db": -80.0,
+            "noise_reduction": 0.0,
+            "highpass": 0.0,
+            "hum": "off",
+        }
+    )
     return params
 
 
@@ -90,6 +98,46 @@ class GateTest(unittest.TestCase):
         gate = dsp.NoiseGate(SR)
         x = np.zeros(BLOCK, dtype=np.float32)
         np.testing.assert_allclose(gate.process(x, -80.0), x)
+
+
+class NoiseToolsTest(unittest.TestCase):
+    def test_highpass_cuts_rumble_but_keeps_voice(self):
+        low = run_chain(sine(35.0, 1.0), {**dsp.DEFAULT_PARAMS, "highpass": 100.0,
+                                          "noise_reduction": 0.0, "gate_db": -80.0})
+        voice = run_chain(sine(440.0, 1.0), {**dsp.DEFAULT_PARAMS, "highpass": 100.0,
+                                             "noise_reduction": 0.0, "gate_db": -80.0})
+        low_rms = float(np.sqrt(np.mean(low[SR // 2:] ** 2)))
+        voice_rms = float(np.sqrt(np.mean(voice[SR // 2:] ** 2)))
+        self.assertLess(low_rms, 0.05)
+        self.assertAlmostEqual(voice_rms / 0.3536, 1.0, delta=0.15)
+
+    def test_hum_filter_removes_mains_hum(self):
+        params = {**dsp.DEFAULT_PARAMS, "hum": "50", "highpass": 0.0,
+                  "noise_reduction": 0.0, "gate_db": -80.0}
+        hum = run_chain(sine(50.0, 2.0), params)
+        clean = run_chain(sine(440.0, 2.0), params)
+        hum_rms = float(np.sqrt(np.mean(hum[SR:] ** 2)))
+        clean_rms = float(np.sqrt(np.mean(clean[SR:] ** 2)))
+        self.assertLess(hum_rms, 0.05)
+        self.assertAlmostEqual(clean_rms / 0.3536, 1.0, delta=0.15)
+
+    def test_noise_suppressor_lowers_hiss_but_keeps_sine(self):
+        rng = np.random.default_rng(7)
+        noise = (rng.normal(0, 0.01, SR)).astype(np.float32)
+        params = {**dsp.DEFAULT_PARAMS, "pitch": 0.0, "highpass": 0.0,
+                  "gate_db": -80.0, "noise_reduction": 1.0}
+        out = run_chain(noise, params)
+        before = float(np.sqrt(np.mean(noise[SR // 2:] ** 2)))
+        after = float(np.sqrt(np.mean(out[SR // 2:] ** 2)))
+        self.assertLess(after, before * 0.6)
+
+        tone = run_chain(sine(440.0, 1.0), {**params, "noise_reduction": 0.0})
+        tone_denoised = run_chain(sine(440.0, 1.0), params)
+        self.assertAlmostEqual(
+            float(np.sqrt(np.mean(tone_denoised[SR // 2:] ** 2))),
+            float(np.sqrt(np.mean(tone[SR // 2:] ** 2))),
+            delta=0.02,
+        )
 
 
 class EchoTest(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Аудио-движок: микрофон -> эффекты -> виртуальный кабель.
+"""Аудио-движок: микрофон -> эффекты -> виртуальный микрофон (кабель).
 
 Вход и выход открываются как два независимых потока. Это позволяет выбирать
 устройства из разных host API (например, микрофон в WASAPI, а VB-Cable в MME)
@@ -18,13 +18,27 @@ from .devices import DeviceInfo
 CHUNK = 512          # сэмплов на блок (~10.7 мс при 48 кГц)
 QUEUE_BLOCKS = 14    # максимум блоков в очереди (~150 мс страховки)
 
+LATENCY_MODES = {
+    # block — сэмплов на колбэк, queue — сколько блоков держим в запасе.
+    "low": {"block": 256, "queue": 4, "latency": "low"},
+    "balanced": {"block": 512, "queue": 8, "latency": "high"},
+    "safe": {"block": 1024, "queue": 16, "latency": "high"},
+}
+
 
 class AudioEngine:
-    def __init__(self) -> None:
+    def __init__(self, latency_mode: str = "low") -> None:
         self.params: dict = dict(DEFAULT_PARAMS)
         self.chain: EffectChain | None = None
+        self.block = CHUNK
+        self.queue_blocks = QUEUE_BLOCKS
+        self.portaudio_latency = "high"
+        self.latency_mode = "balanced"
+        self.set_latency(latency_mode)
 
-        self._queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=QUEUE_BLOCKS)
+        self._queue: queue.Queue[np.ndarray] = queue.Queue(
+            maxsize=self.queue_blocks
+        )
         self._carry = np.zeros(0, dtype=np.float32)
         self._last_out: np.ndarray | None = None
         self._resampler: LinearResampler | None = None
@@ -41,6 +55,14 @@ class AudioEngine:
 
         self.in_name = ""
         self.out_name = ""
+
+    def set_latency(self, mode: str) -> None:
+        """Выбрать режим задержки. Применяется при следующем старте."""
+        cfg = LATENCY_MODES.get(mode, LATENCY_MODES["balanced"])
+        self.latency_mode = mode if mode in LATENCY_MODES else "balanced"
+        self.block = int(cfg["block"])
+        self.queue_blocks = int(cfg["queue"])
+        self.portaudio_latency = str(cfg["latency"])
 
     # ------------------------------------------------------------------
     # Колбэки
@@ -135,8 +157,8 @@ class AudioEngine:
                             device=index,
                             channels=channels,
                             samplerate=sr,
-                            blocksize=CHUNK,
-                            latency="high",
+                            blocksize=self.block,
+                            latency=self.portaudio_latency,
                             dtype="float32",
                             callback=self._input_cb,
                         )
@@ -159,8 +181,8 @@ class AudioEngine:
                             device=index,
                             channels=channels,
                             samplerate=sr,
-                            blocksize=CHUNK,
-                            latency="high",
+                            blocksize=self.block,
+                            latency=self.portaudio_latency,
                             dtype="float32",
                             callback=self._output_cb,
                         )
@@ -184,7 +206,7 @@ class AudioEngine:
 
         self.last_error = ""
         self.underruns = 0
-        self._queue = queue.Queue(maxsize=QUEUE_BLOCKS)
+        self._queue = queue.Queue(maxsize=self.queue_blocks)
         self._carry = np.zeros(0, dtype=np.float32)
 
         in_stream, in_sr, in_errors = self._open_input(input_device)
@@ -241,7 +263,7 @@ class AudioEngine:
         self.chain = None
         self._resampler = None
         self._last_out = None
-        self._queue = queue.Queue(maxsize=QUEUE_BLOCKS)
+        self._queue = queue.Queue(maxsize=self.queue_blocks)
         self._carry = np.zeros(0, dtype=np.float32)
         self.in_level = 0.0
         self.out_level = 0.0

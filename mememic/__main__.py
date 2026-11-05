@@ -15,7 +15,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="mememic",
-        description="Войс-ченджер: микрофон -> эффекты -> виртуальный кабель.",
+        description="Войс-ченджер: микрофон -> эффекты -> виртуальный микрофон.",
     )
     parser.add_argument(
         "--list-devices",

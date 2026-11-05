@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, iirnotch, sosfilt, tf2sos
 
 # ---------------------------------------------------------------------------
 # Параметры по умолчанию и пресеты
@@ -23,7 +23,10 @@ DEFAULT_PARAMS: dict = {
     "drive": 0.0,          # 0..100, «грязь»/перегруз
     "filter": "none",      # none | phone | muffled | thin
     "volume": 1.0,         # 0..2
-    "gate_db": -60.0,      # порог шум-гейта, -80 = выключен
+    "gate_db": -50.0,      # порог шум-гейта, -80 = выключен
+    "noise_reduction": 0.35,  # 0..1, лёгкое подавление шипения
+    "highpass": 80.0,      # Гц, срез инфраниза/гула, 0 = выключен
+    "hum": "off",          # off | 50 | 60 — подавление наводок сети
     "bypass": False,
 }
 
@@ -244,6 +247,138 @@ class NoiseGate:
 
 
 # ---------------------------------------------------------------------------
+# Чистка низа и сетевых наводок
+# ---------------------------------------------------------------------------
+
+
+class HighPass:
+    """Мягкий срез инфраниза: убирает гул стола, ветер и DC-смещение."""
+
+    def __init__(self, samplerate: int):
+        self.sr = float(samplerate)
+        self.cutoff = 0.0
+        self.sos = None
+        self.zi = None
+
+    def process(self, x: np.ndarray, cutoff: float) -> np.ndarray:
+        cutoff = float(cutoff or 0.0)
+        cutoff = min(max(cutoff, 0.0), self.sr * 0.45)
+        if cutoff <= 10.0 or len(x) == 0:
+            self.cutoff = cutoff
+            self.sos = None
+            self.zi = None
+            return x
+
+        if self.sos is None or abs(cutoff - self.cutoff) > 0.5:
+            self.cutoff = cutoff
+            self.sos = butter(
+                2, cutoff, btype="highpass", fs=self.sr, output="sos"
+            )
+            self.zi = np.zeros((self.sos.shape[0], 2), dtype=np.float64)
+
+        y, self.zi = sosfilt(self.sos, x, zi=self.zi)
+        return y.astype(np.float32)
+
+
+class HumFilter:
+    """Узкие режекторы на 50/60 Гц и первые гармоники."""
+
+    MODES = ("off", "50", "60")
+
+    def __init__(self, samplerate: int):
+        self.sr = float(samplerate)
+        self.mode = "off"
+        self.sos = None
+        self.zi = None
+
+    def _build(self, mode: str):
+        if mode not in ("50", "60"):
+            return None
+        base = float(mode)
+        parts = []
+        for freq in (base, base * 2.0, base * 3.0):
+            if freq >= self.sr * 0.45:
+                continue
+            b, a = iirnotch(freq, Q=30.0, fs=self.sr)
+            parts.append(tf2sos(b, a))
+        return np.vstack(parts) if parts else None
+
+    def process(self, x: np.ndarray, mode: str) -> np.ndarray:
+        if mode not in self.MODES:
+            mode = "off"
+        if mode != self.mode:
+            self.mode = mode
+            self.sos = self._build(mode)
+            self.zi = (
+                None
+                if self.sos is None
+                else np.zeros((self.sos.shape[0], 2), dtype=np.float64)
+            )
+        if self.sos is None or len(x) == 0:
+            return x
+        y, self.zi = sosfilt(self.sos, x, zi=self.zi)
+        return y.astype(np.float32)
+
+
+class NoiseSuppressor:
+    """Лёгкий подавитель шипения без FFT-задержки.
+
+    Оценивает «шумность» блока по спектральной плоскостности: у шипения
+    спектр ровный, у голоса и тонов — пиковый. Поэтому устойчивые ноты и
+    гласные не глушатся, а постоянный фон между словами становится тише.
+    """
+
+    def __init__(self, samplerate: int):
+        self.sr = float(samplerate)
+        self.gain = 1.0
+        self._window: np.ndarray | None = None
+
+    def process(self, x: np.ndarray, amount: float) -> np.ndarray:
+        amount = float(amount or 0.0)
+        if amount <= 0.001 or len(x) < 32:
+            self.gain = 1.0
+            return x
+
+        n = len(x)
+        if self._window is None or len(self._window) != n:
+            self._window = np.hanning(n).astype(np.float32)
+
+        spectrum = np.abs(np.fft.rfft(x * self._window)) + 1e-9
+        flatness = float(
+            np.exp(np.mean(np.log(spectrum))) / max(np.mean(spectrum), 1e-12)
+        )
+        rms = float(np.sqrt(np.mean(x * x) + 1e-12))
+
+        # 0.3 — граница «ровный шум / гармонический звук». Значение подобрано
+        # так, чтобы синус и голос оставались нетронутыми.
+        if flatness > 0.30:
+            target = 1.0 - (0.85 if rms < 0.03 else 0.35) * min(1.0, amount)
+        else:
+            target = 1.0
+
+        tau = 0.012 if target < self.gain else 0.150
+        coef = 1.0 - np.exp(-n / (tau * self.sr))
+        self.gain += (target - self.gain) * coef
+        return (x * self.gain).astype(np.float32)
+
+
+def soft_limit(x: np.ndarray) -> np.ndarray:
+    """Плавный лимитер вместо жёсткого клипа — меньше щелчков и хрипа."""
+    threshold = 0.92
+    absx = np.abs(x)
+    mask = absx > threshold
+    if not np.any(mask):
+        return x.astype(np.float32, copy=False)
+
+    y = x.astype(np.float32, copy=True)
+    over = (absx[mask] - threshold) / (1.0 - threshold)
+    y[mask] = np.sign(x[mask]) * (
+        threshold + (1.0 - threshold) * np.tanh(over)
+    )
+    return y
+
+
+# ---------------------------------------------------------------------------
 # Кольцевая модуляция («робот»)
 # ---------------------------------------------------------------------------
 
@@ -379,11 +514,14 @@ class Echo:
 
 
 class EffectChain:
-    """Последовательная цепочка: гейт -> питч -> робот -> фильтр -> драйв -> эхо."""
+    """Цепочка: низ -> наводки -> гейт -> шум -> питч -> робот -> фильтр -> драйв -> эхо."""
 
     def __init__(self, samplerate: int):
         self.sr = samplerate
+        self.highpass = HighPass(samplerate)
+        self.hum = HumFilter(samplerate)
         self.gate = NoiseGate(samplerate)
+        self.denoise = NoiseSuppressor(samplerate)
         self.pitch = PitchShifter(samplerate)
         self.ring = RingMod(samplerate)
         self.vfilter = VoiceFilter(samplerate)
@@ -394,7 +532,10 @@ class EffectChain:
         if len(x) == 0 or p.get("bypass", False):
             return x
 
-        x = self.gate.process(x, p.get("gate_db", -60.0))
+        x = self.highpass.process(x, float(p.get("highpass", 80.0)))
+        x = self.hum.process(x, str(p.get("hum", "off")))
+        x = self.gate.process(x, p.get("gate_db", -50.0))
+        x = self.denoise.process(x, float(p.get("noise_reduction", 0.0)))
         x = self.pitch.process(x, float(p.get("pitch", 0.0)))
         x = self.ring.process(
             x,
@@ -414,7 +555,7 @@ class EffectChain:
         if volume != 1.0:
             x = x * volume
 
-        return np.clip(x, -1.0, 1.0).astype(np.float32, copy=False)
+        return soft_limit(x)
 
 
 # ---------------------------------------------------------------------------

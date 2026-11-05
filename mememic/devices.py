@@ -18,7 +18,14 @@ _API_RANK = {
     "Windows WDM-KS": 4,
 }
 
-_CABLE_HINTS = ("cable input", "cable output", "voicemeeter", "virtual cable")
+_CABLE_HINTS = (
+    "cable input",
+    "cable output",
+    "voicemeeter",
+    "virtual cable",
+    "virtual audio driver",
+    "virtual mic",
+)
 
 
 @dataclass
@@ -130,9 +137,11 @@ def find_by_name(devices: list[DeviceInfo], name: str | None) -> DeviceInfo | No
 
 
 def find_virtual_output(devices: list[DeviceInfo]) -> DeviceInfo | None:
-    for info in devices:
-        if "cable input" in info.name.lower():
-            return info
+    # Порядок предпочтений: VB-Cable, затем другие виртуальные устройства.
+    for hint in ("cable input", "voicemeeter input", "virtual audio driver"):
+        for info in devices:
+            if hint in info.name.lower():
+                return info
     for info in devices:
         if info.is_cable:
             return info
