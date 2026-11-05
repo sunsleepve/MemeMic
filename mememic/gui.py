@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import time
 import tkinter as tk
+import traceback
 import webbrowser
 from tkinter import font as tkfont
 from tkinter import messagebox, simpledialog, ttk
@@ -23,6 +25,39 @@ def log(msg: str) -> None:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
     except OSError:
+        pass
+
+
+def crash_path():
+    """Файл с подробностями падения — рядом с log.txt."""
+    return config.settings_path().with_name("crash.txt")
+
+
+def write_crash(title: str, text: str) -> None:
+    """Сохраняем traceback, чтобы ошибку было видно даже у windowed-exe."""
+    try:
+        path = crash_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(f"===== {time.strftime('%Y-%m-%d %H:%M:%S')} {title} =====\n")
+            fh.write(text.rstrip() + "\n\n")
+    except OSError:
+        pass
+    try:
+        print(f"MemeMic: {title}\n{text}", file=sys.stderr)
+    except Exception:
+        pass
+
+
+def show_startup_error(title: str, text: str) -> None:
+    """Диалог с ошибкой запуска; если messagebox недоступен — молчим."""
+    try:
+        messagebox.showerror(
+            "MemeMic — ошибка запуска",
+            f"{title}\n\n{text.strip().splitlines()[-1]}\n\n"
+            f"Подробности: {crash_path()}",
+        )
+    except Exception:
         pass
 
 
@@ -813,6 +848,7 @@ class App:
         self._sync_widgets_from_params()
         self._set_active_preset(self.preset_var.get())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.report_callback_exception = self._on_callback_error
         self.root.after(60, self._tick)
 
     # ------------------------------------------------------------------
@@ -2074,6 +2110,22 @@ class App:
     # ------------------------------------------------------------------
     # Прочее
     # ------------------------------------------------------------------
+    def _on_callback_error(self, exc_type, exc_value, exc_tb) -> None:
+        """Ошибки обработчиков Tk не должны молча теряться."""
+        text = "".join(
+            traceback.format_exception(exc_type, exc_value, exc_tb)
+        )
+        log("callback error: " + text.strip().replace("\n", " | "))
+        write_crash("Ошибка обработчика интерфейса", text)
+        try:
+            messagebox.showerror(
+                "MemeMic — ошибка",
+                f"{exc_value}\n\nПодробности: {crash_path()}",
+                parent=self.root,
+            )
+        except Exception:
+            pass
+
     def _open_settings_folder(self) -> None:
         path = config.settings_path().parent
         try:
@@ -2113,6 +2165,26 @@ class App:
 
 
 def run() -> None:
-    root = tk.Tk()
-    App(root)
+    log(f"gui start: version={__version__}")
+    try:
+        root = tk.Tk()
+    except Exception:
+        text = traceback.format_exc()
+        write_crash("Не удалось создать окно Tk", text)
+        show_startup_error("Не удалось создать окно Tk.", text)
+        return
+
+    try:
+        App(root)
+    except Exception:
+        text = traceback.format_exc()
+        write_crash("Ошибка при создании интерфейса", text)
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        show_startup_error("Не удалось создать интерфейс.", text)
+        return
+
+    log("gui ready")
     root.mainloop()

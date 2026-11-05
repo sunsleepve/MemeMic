@@ -14,11 +14,11 @@ Feed your mic through effects and into a virtual microphone, so Discord, games, 
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://github.com/sunsleepve/MemeMic/actions/workflows/tests.yml/badge.svg)
 ![No network](https://img.shields.io/badge/network-none-brightgreen)
-![Pre-release](https://img.shields.io/badge/release-v0.2.0--beta-orange)
+![Pre-release](https://img.shields.io/badge/release-v0.2.1--beta-orange)
 
 ![MemeMic screenshot](docs/screenshot.png)
 
-> **v0.2.0-beta** — new Voicemod-style interface, cleaner sound and low-latency modes. Preset names and the interface are in Russian; you can add your own presets with any names.
+> **v0.2.1-beta** — new Voicemod-style interface, cleaner sound and low-latency modes. This build starts in 1–2 seconds: it is shipped as a folder instead of a self-unpacking one-file exe. Preset names and the interface are in Russian; you can add your own presets with any names.
 
 ## How it works
 
@@ -61,7 +61,7 @@ MemeMic does not install a driver of its own — see [Why not our own virtual mi
 
 - Windows 10 or 11 (x64);
 - [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) — free, separate download;
-- either the prebuilt `MemeMic.exe` **or** Python 3.10+ (tested on 3.13).
+- either the prebuilt `MemeMic` folder **or** Python 3.10+ (tested on 3.13).
 
 ### Install VB-Cable (one time)
 
@@ -86,15 +86,20 @@ Voicemod creates its own microphone because it ships a **kernel-mode audio drive
 
 So the plan is:
 
-1. **0.2.0-beta (this release)** — polished UI, clean sound, low latency, automatic detection of any installed virtual cable (VB-Cable, VoiceMeeter, Virtual Audio Driver by MTT).
+1. **0.2.1-beta (this release)** — polished UI, clean sound, low latency, automatic detection of any installed virtual cable (VB-Cable, VoiceMeeter, Virtual Audio Driver by MTT).
 2. **Next** — a dedicated signed driver project (WDK + EV certificate + Microsoft attestation), branded as a MemeMic microphone. That is a separate, long-term effort and cannot be done inside the Python app.
 
 ## Install
 
 ### Option A — prebuilt executable
 
-1. Download `MemeMic-win64.zip` from the [Releases](../../releases) page and unpack it.
-2. Run `MemeMic.exe`. No installation or Python required.
+1. Download `MemeMic-win64.zip` from the [Releases](../../releases) page.
+2. Unpack it to a normal folder (for example `C:\Apps`). **Do not run it from inside the ZIP viewer** — Windows then unpacks the app to a temporary folder on every launch, which is slow and may fail.
+3. Open the unpacked `MemeMic` folder and run `MemeMic.exe`. No installation or Python required.
+
+The archive is about 50 MB; the unpacked folder is about 130 MB, because it contains Python and the audio libraries. The window appears in 1–2 seconds.
+
+> If you tried **v0.2.0-beta** and it seemed to hang for 30–60 seconds before the window appeared: that build was a self-unpacking one-file exe. **v0.2.1-beta** is a folder build and no longer unpacks itself on every start. Delete the old `MemeMic.exe` and use the new folder.
 
 Windows SmartScreen may warn about an unsigned executable: **More info → Run anyway**. Some antivirus engines also flag PyInstaller-packed binaries as “unknown”; the source is right here if you prefer to build it yourself.
 
@@ -125,7 +130,7 @@ List the audio devices without starting the GUI:
 
 ## Quick start
 
-1. Start `MemeMic.exe` (or `run.bat`).
+1. Start `MemeMic\MemeMic.exe` (or `run.bat`).
 2. **Микрофон** (*Microphone*) — your real microphone (a device *without* “CABLE” in the name).
 3. **Виртуальный выход** (*Virtual output*) — `CABLE Input (VB-Audio Virtual Cable)`; MemeMic usually selects it for you and shows a green **✓ VB-Cable** badge.
 4. Click a voice card, for example **“Мистер, вы потеряли кошелёк”** (robot from the meme). The preset is applied immediately.
@@ -232,7 +237,9 @@ Example:
 | Echo on the other side | disable Discord echo cancellation and do not monitor through speakers |
 | Delay too noticeable | use the **Низкая** latency mode; close heavy apps |
 | Choppy audio / dropouts | switch to **Сбалансированная** or **Надёжная**; check `%APPDATA%\MemeMic\log.txt` for the `underruns` counter |
-| GUI does not start | run from a console: `.venv\Scripts\python.exe -m mememic` to see the traceback |
+| GUI does not start | open `%APPDATA%\MemeMic\crash.txt` — it contains the full error; when running from source also use `.venv\Scripts\python.exe -m mememic` to see the traceback |
+| Window does not appear / app “does nothing” | make sure you unpacked the ZIP and started `MemeMic\MemeMic.exe` from a normal folder, not from inside the archive |
+| Windows blocks the app | SmartScreen: **More info → Run anyway**; check Windows Security quarantine if the file disappeared |
 | Sounddevice / PortAudio error | re-run `install.bat` |
 
 Reset settings: delete `%APPDATA%\MemeMic\settings.json`.  
@@ -244,7 +251,7 @@ Reset custom presets: delete `%APPDATA%\MemeMic\presets.json`.
 build.bat
 ```
 
-The script installs PyInstaller into `.venv` and produces `dist\MemeMic.exe` (one-file, windowed, ~53 MB).
+The script installs PyInstaller into `.venv`, produces `dist\MemeMic\MemeMic.exe` (onedir, windowed), copies the README files and `LICENSE` next to it, and packs everything into `dist\MemeMic-win64.zip`. The folder build starts in 1–2 seconds; the ZIP is ready to upload to a release.
 
 ## Project structure
 
@@ -263,7 +270,7 @@ MemeMic/
 ├── docs/screenshot.png
 ├── docs/logo.png
 ├── main.py            # PyInstaller entry point
-├── build.bat          # build dist\MemeMic.exe
+├── build.bat          # build dist\MemeMic\MemeMic.exe and the release ZIP
 ├── install.bat        # create .venv and install dependencies
 ├── run.bat            # run from source
 └── requirements.txt
